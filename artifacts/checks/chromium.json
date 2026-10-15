@@ -1,0 +1,74 @@
+[
+  {
+    "name": "chromium: product and main action on the 390px first screen",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: truthful prelaunch state, no fabricated values",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: mobile menu opens, closes, and returns focus",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: swarm count, keyboard sprouting, drag alternative, reset and reduced motion",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: pointer dragging moves the seal without a false click",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: how-to-buy tabs, arrow keys, End and next-step cycle",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: live values, zero volume, supplied logo, Buy/Chart URLs, copy controls and three share intents",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: DexScreener embed is opt-in and has the required parameters",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: failed refresh retains and labels last known data",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: EN / ES / 中文 reflow at 320, 375, 390, 768, 1440 and 1920px; language persists",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: axe WCAG A/AA scan, light/dark at 375/1440: zero violations",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: theme persists; all media decode; both themes captured",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: meme download interaction and all six PNGs",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: 200% text enlargement reflows without horizontal overflow",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: 404 page renders at 375 / 1440, return link resolves",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: zero uncaught script errors and zero failed HTTP resources",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: zero unexpected console errors (the simulated API outage is expected)",
+    "result": "passed"
+  },
+  {
+    "name": "chromium: live Perlin motion pauses and resumes",
+    "result": "passed"
+  }
+]

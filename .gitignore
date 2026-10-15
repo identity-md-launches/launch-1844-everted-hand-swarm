@@ -1,0 +1,13 @@
+# Explicit path budget: this file <=512 bytes; delivery <=8,388,608 bytes.
+!/artifacts/
+!/artifacts/**
+!/dist/
+!/dist/**
+**/node_modules/
+**/.npm/
+**/.cache/
+**/__pycache__/
+**/cache/
+**/out/
+**/coverage/
+/test/scratch/

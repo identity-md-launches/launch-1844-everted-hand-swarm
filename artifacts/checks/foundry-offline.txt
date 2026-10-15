@@ -1,0 +1,63 @@
+Compiling 4 files with Solc 0.8.26
+Solc 0.8.26 finished in 54.40s
+Compiler run successful!
+
+Ran 1 test for test/EHSHook.t.sol:EHSMainnetForkTest
+[SKIP: skipped] setUp() (gas: 0)
+Suite result: ok. 0 passed; 0 failed; 1 skipped; finished in 1.00ms (0.00ns CPU time)
+
+Ran 1 test for test/EHSHook.t.sol:FreshManagerTest
+[PASS] test_firstBuyTokenOnlyLiquidityNoIMDBalance() (gas: 6737671)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 9.46ms (8.72ms CPU time)
+
+Ran 3 tests for test/EHS.t.sol:EHSTest
+[PASS] testFuzz_transferConservesSupply(uint256) (runs: 1000, μ: 111062, ~: 111445)
+[PASS] test_allowanceLimitsAndZeroRecipient() (gas: 170223)
+[PASS] test_fullSupplyAndNoMintPath() (gas: 47880)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 507.23ms (500.36ms CPU time)
+
+Ran 19 tests for test/EHSHook.t.sol:EHSHookReverseOrderTest
+[PASS] testFuzz_allDirectionsAndPriceLimitedFills(uint96,bool,bool,uint16) (runs: 256, μ: 330753, ~: 318975)
+[PASS] testFuzz_sequenceSolvency(uint256) (runs: 256, μ: 3098755, ~: 3102127)
+[PASS] test_belowThresholdAndMalformedContextDoNotRevert() (gas: 1125715)
+[PASS] test_buyExactInput() (gas: 400047)
+[PASS] test_buyExactOutput() (gas: 366433)
+[PASS] test_claimAndPermissionlessPaymentCannotRedirect() (gas: 913160)
+[PASS] test_exactInputPartialFillRefund() (gas: 445318)
+[PASS] test_exactInputSellPartialFill() (gas: 287624)
+[PASS] test_exactOutputBuyPartialFill() (gas: 339436)
+[PASS] test_exactOutputPartialFillRefund() (gas: 391259)
+[PASS] test_exactTenIMDThreshold() (gas: 352522)
+[PASS] test_extremeSpecifiedAmountRejectsOnlyUnrepresentableFee() (gas: 391598)
+[PASS] test_factoryCanCollectWithZeroLiquidityChange() (gas: 480443)
+[PASS] test_noRuntimeEscapeHatches() (gas: 1138423)
+[PASS] test_paymentFailurePreservesDebtAndDoesNotBlockSwaps() (gas: 930439)
+[PASS] test_permissionsAccessAndSizes() (gas: 121177)
+[PASS] test_sellExactInput() (gas: 313319)
+[PASS] test_sellExactOutput() (gas: 346438)
+[PASS] test_wrongPoolCannotInitialize() (gas: 44195)
+Suite result: ok. 19 passed; 0 failed; 0 skipped; finished in 1.25s (2.41s CPU time)
+
+Ran 19 tests for test/EHSHook.t.sol:EHSHookTest
+[PASS] testFuzz_allDirectionsAndPriceLimitedFills(uint96,bool,bool,uint16) (runs: 1000, μ: 331897, ~: 320131)
+[PASS] testFuzz_sequenceSolvency(uint256) (runs: 1000, μ: 3108449, ~: 3105500)
+[PASS] test_belowThresholdAndMalformedContextDoNotRevert() (gas: 1118227)
+[PASS] test_buyExactInput() (gas: 394130)
+[PASS] test_buyExactOutput() (gas: 361952)
+[PASS] test_claimAndPermissionlessPaymentCannotRedirect() (gas: 908048)
+[PASS] test_exactInputPartialFillRefund() (gas: 439681)
+[PASS] test_exactInputSellPartialFill() (gas: 292542)
+[PASS] test_exactOutputBuyPartialFill() (gas: 334143)
+[PASS] test_exactOutputPartialFillRefund() (gas: 395833)
+[PASS] test_exactTenIMDThreshold() (gas: 346452)
+[PASS] test_extremeSpecifiedAmountRejectsOnlyUnrepresentableFee() (gas: 385948)
+[PASS] test_factoryCanCollectWithZeroLiquidityChange() (gas: 474452)
+[PASS] test_noRuntimeEscapeHatches() (gas: 874841)
+[PASS] test_paymentFailurePreservesDebtAndDoesNotBlockSwaps() (gas: 925165)
+[PASS] test_permissionsAccessAndSizes() (gas: 121119)
+[PASS] test_sellExactInput() (gas: 318550)
+[PASS] test_sellExactOutput() (gas: 350233)
+[PASS] test_wrongPoolCannotInitialize() (gas: 44186)
+Suite result: ok. 19 passed; 0 failed; 0 skipped; finished in 1.50s (2.69s CPU time)
+
+Ran 5 test suites in 1.50s (3.27s CPU time): 42 tests passed, 0 failed, 1 skipped (43 total tests)

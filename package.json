@@ -1,0 +1,16 @@
+{
+  "name": "everted-hand-swarm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-free static EHS site; build copies the complete site to dist.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "preview": "node scripts/preview.mjs",
+    "test": "node --test test/site.test.mjs",
+    "test:browser": "node scripts/validate-browser.mjs",
+    "test:browser:webkit": "node scripts/validate-browser.mjs --webkit"
+  },
+  "devDependencies": { "typescript": "5.9.3", "playwright": "1.64.1", "@axe-core/playwright": "4.10.2" }
+}

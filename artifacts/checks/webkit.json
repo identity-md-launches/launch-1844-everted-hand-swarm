@@ -1,0 +1,70 @@
+[
+  {
+    "name": "webkit: product and main action on the 390px first screen",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: truthful prelaunch state, no fabricated values",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: mobile menu opens, closes, and returns focus",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: swarm count, keyboard sprouting, drag alternative, reset and reduced motion",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: pointer dragging moves the seal without a false click",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: how-to-buy tabs, arrow keys, End and next-step cycle",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: live values, zero volume, supplied logo, Buy/Chart URLs, copy controls and three share intents",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: DexScreener embed is opt-in and has the required parameters",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: failed refresh retains and labels last known data",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: EN / ES / 中文 reflow at 320, 375, 390, 768, 1440 and 1920px; language persists",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: theme persists; all media decode; both themes captured",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: meme download interaction and all six PNGs",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: 200% text enlargement reflows without horizontal overflow",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: 404 page renders at 375 / 1440, return link resolves",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: zero uncaught script errors and zero failed HTTP resources",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: zero unexpected console errors (the simulated API outage is expected)",
+    "result": "passed"
+  },
+  {
+    "name": "webkit: live Perlin motion pauses and resumes",
+    "result": "passed"
+  }
+]

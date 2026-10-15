@@ -1,0 +1,8 @@
+No files changed, compilation skipped
+
+Ran 2 tests for test/EHSHook.t.sol:EHSMainnetForkTest
+[PASS] test_forkAllSwapModesAndClaims() (gas: 1171232)
+[PASS] test_forkPartialFills() (gas: 628583)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 1.46s (336.15ms CPU time)
+
+Ran 1 test suite in 1.46s (1.46s CPU time): 2 tests passed, 0 failed, 0 skipped (2 total tests)

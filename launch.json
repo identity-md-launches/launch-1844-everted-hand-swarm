@@ -1,0 +1,16 @@
+{
+  "kind": "univ4_hook",
+  "token": { "contract": "EHS", "name": "Everted Hand Swarm", "symbol": "EHS", "decimals": 18 },
+  "hook": {
+    "contract": "EHSHook",
+    "constructorArgs": ["$poolManager", "$token"],
+    "permissions": ["beforeInitialize", "beforeSwap", "afterSwap", "beforeSwapReturnDelta", "afterSwapReturnDelta"]
+  },
+  "pool": {
+    "pairedCurrency": "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+    "fee": 12500,
+    "tickSpacing": 60,
+    "initialPrice": "79228162514264337593543950336"
+  },
+  "notes": "EHSHook(IPoolManager manager, address token) takes $poolManager (Ethereum mainnet 0x000000000004444c5dc75cB358380D2e3dE08A90) and $token. Deploy directly by CREATE2 with low 14 address bits 0x20cc. Static 1.25% LP fee plus 2% of filled IMD as ERC-6909 claims; specified-side reserves reconcile in afterSwap and excess becomes a claim owned by the calling swapper/router. Routers pass abi.encode(outputRecipient) for rewards; empty or malformed context falls back to the calling swapper without blocking swaps. Buys of at least 10 IMD record 1% of filled IMD, capped by unowed accrued fees, claimable only by/to the beneficiary. No in-swap reward transfers, owner or upgrades. Factory mints all 1e27 units to itself and distributes 90% liquidity / 10% swarm; initialPrice is provenance only."
+}
