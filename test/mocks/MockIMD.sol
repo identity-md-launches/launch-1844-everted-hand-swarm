@@ -6,6 +6,7 @@ contract MockIMD {
     uint8 public constant decimals = 18;
     mapping(address => uint256) public balanceOf;
     bool public failTransfers;
+    address public blockedRecipient;
     address public reentryHook;
 
     function mint(address to, uint256 amount) external {
@@ -20,8 +21,13 @@ contract MockIMD {
         reentryHook = hook;
     }
 
+    function setBlockedRecipient(address recipient) external {
+        blockedRecipient = recipient;
+    }
+
     function transfer(address to, uint256 amount) external returns (bool) {
         require(!failTransfers, "IMD transfer rejected");
+        require(to != blockedRecipient, "recipient blocked");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
         if (reentryHook != address(0)) {

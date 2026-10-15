@@ -1,0 +1,17 @@
+No files changed, compilation skipped
+2026-10-15T13:08:09.875265Z ERROR sharedbackend: Failed to send/recv `basic` err=failed to get account for 0x000000000004444c5dc75cB358380D2e3dE08A90: server returned an error response: error code -32000: historical state b455b6b928f471a1aab149e4ba2dffa6715edd70883ed9160f931d7a9042a7ee is not available address=0x000000000004444c5dc75cB358380D2e3dE08A90
+
+Ran 1 test for test/EHSHook.t.sol:EHSMainnetForkTest
+[FAIL: EVM error; database error: failed to get account for 0x000000000004444c5dc75cB358380D2e3dE08A90: server returned an error response: error code -32000: historical state b455b6b928f471a1aab149e4ba2dffa6715edd70883ed9160f931d7a9042a7ee is not available] setUp() (gas: 0)
+Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 559.19ms (0.00ns CPU time)
+
+Ran 1 test suite in 837.63ms (559.19ms CPU time): 0 tests passed, 1 failed, 0 skipped (1 total tests)
+
+Failing tests:
+Encountered 1 failing test in test/EHSHook.t.sol:EHSMainnetForkTest
+[FAIL: EVM error; database error: failed to get account for 0x000000000004444c5dc75cB358380D2e3dE08A90: server returned an error response: error code -32000: historical state b455b6b928f471a1aab149e4ba2dffa6715edd70883ed9160f931d7a9042a7ee is not available] setUp() (gas: 0)
+
+Encountered a total of 1 failing tests, 0 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 1 failed test
+Tip: Run `forge test --debug --match-test <TEST_NAME>` to inspect one failing test in the debugger

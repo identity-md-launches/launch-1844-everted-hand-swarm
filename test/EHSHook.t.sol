@@ -12,6 +12,7 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {TransientStateLibrary} from "v4-core/src/libraries/TransientStateLibrary.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {EHS} from "../src/EHS.sol";
@@ -20,6 +21,7 @@ import {MockIMD} from "./mocks/MockIMD.sol";
 
 abstract contract HookHarness is Test, IUnlockCallback {
     using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
     address internal constant IMD = 0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7;
     uint160 internal constant Q96 = 79228162514264337593543950336;
     IPoolManager internal manager;
@@ -66,28 +68,35 @@ abstract contract HookHarness is Test, IUnlockCallback {
         if (mode == 0) {
             (int24 lower, int24 upper, int256 liquidity) = abi.decode(args, (int24, int24, int256));
             (delta,) = manager.modifyLiquidity(key, ModifyLiquidityParams(lower, upper, liquidity, bytes32(0)), "");
-        } else if (mode == 1) {
+        } else if (mode == 1 || mode == 3) {
             (SwapParams memory params, bytes memory context) = abi.decode(args, (SwapParams, bytes));
+            uint256 claimsBefore = manager.balanceOf(address(this), uint256(uint160(IMD)));
             delta = manager.swap(key, params, context);
+            if (mode == 3) {
+                // A router can burn only this swap's refund before settling. This avoids
+                // prefunding the reservation and leaves any older claims untouched.
+                uint256 refund = manager.balanceOf(address(this), uint256(uint160(IMD))) - claimsBefore;
+                if (refund != 0) manager.burn(address(this), uint256(uint160(IMD)), refund);
+            }
         } else {
             uint256 claims = manager.balanceOf(address(this), uint256(uint160(IMD)));
             manager.burn(address(this), uint256(uint160(IMD)), claims);
             manager.take(Currency.wrap(IMD), address(this), claims);
             return "";
         }
-        settle(key.currency0, delta.amount0(), mode == 1);
-        settle(key.currency1, delta.amount1(), mode == 1);
+        settle(key.currency0, manager.currencyDelta(address(this), key.currency0), mode != 0);
+        settle(key.currency1, manager.currencyDelta(address(this), key.currency1), mode != 0);
         return abi.encode(delta);
     }
 
-    function settle(Currency currency, int128 amount, bool isTrade) internal {
+    function settle(Currency currency, int256 amount, bool isTrade) internal {
         if (amount < 0) {
             manager.sync(currency);
-            currency.transfer(address(manager), uint256(-int256(amount)));
+            currency.transfer(address(manager), uint256(-amount));
             manager.settle();
         } else if (amount > 0) {
             // Exactly the address encoded as recipient in hookData receives the output.
-            manager.take(currency, isTrade ? buyer : address(this), uint256(uint128(amount)));
+            manager.take(currency, isTrade ? buyer : address(this), uint256(amount));
         }
     }
 
@@ -100,6 +109,9 @@ abstract contract HookHarness is Test, IUnlockCallback {
         SwapParams memory params = SwapParams(z, exactInput ? -int256(amount) : int256(amount), limit);
         uint256 beforeFees = hook.accruedBalance();
         uint256 beforeRefund = manager.balanceOf(address(this), uint256(uint160(IMD)));
+        int256 pairBefore = int256(MockIMD(IMD).balanceOf(address(this)) + MockIMD(IMD).balanceOf(buyer));
+        int256 tokenBefore = int256(token.balanceOf(address(this)) + token.balanceOf(buyer));
+        int256 rawTokenDelta;
         vm.recordLogs();
         manager.unlock(abi.encode(uint8(1), abi.encode(params, context)));
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -112,12 +124,19 @@ abstract contract HookHarness is Test, IUnlockCallback {
                 (int128 a0, int128 a1,,,, uint24 lpFee) =
                     abi.decode(logs[i].data, (int128, int128, uint160, uint128, int24, uint24));
                 int256 d = pair0 ? int256(a0) : int256(a1);
+                rawTokenDelta = pair0 ? int256(a1) : int256(a0);
                 filled = uint256(d < 0 ? -d : d);
                 assertEq(lpFee, 12500, "static LP fee changed");
             }
         }
         fee = hook.accruedBalance() - beforeFees;
         refunded = manager.balanceOf(address(this), uint256(uint160(IMD))) - beforeRefund;
+        int256 pairAfter = int256(MockIMD(IMD).balanceOf(address(this)) + MockIMD(IMD).balanceOf(buyer));
+        int256 tokenAfter = int256(token.balanceOf(address(this)) + token.balanceOf(buyer));
+        // Independently verify what the trader actually paid/received, including refund claims.
+        int256 expectedPairChange = buy ? -int256(filled + fee) : int256(filled - fee);
+        assertEq(pairAfter - pairBefore + int256(refunded), expectedPairChange, "net IMD settlement");
+        assertEq(tokenAfter - tokenBefore, rawTokenDelta, "hook must not tax EHS");
         assertEq(fee, filled * 200 / 10000, "fee must track the actual manager fill");
         assertLe(hook.owedTotal(), hook.accruedBalance(), "insolvent rewards");
         assertEq(manager.balanceOf(address(hook), uint256(uint160(IMD))), hook.accruedBalance());
@@ -173,6 +192,82 @@ contract EHSHookTest is HookHarness {
         partialFill(false, true);
     }
 
+    function test_zeroFillRefundsEntireReserve() public {
+        manager.unlock(abi.encode(uint8(0), abi.encode(int24(-60000), int24(60000), -int256(1_000_000 ether))));
+        uint256 snapshot = vm.snapshotState();
+        for (uint256 i; i < 4; ++i) {
+            bool buy = i & 1 == 0;
+            bool input = i & 2 == 0;
+            uint160 limit = TickMath.getSqrtPriceAtTick(buy == pair0 ? int24(-60) : int24(60));
+            (uint256 filled, uint256 fee, uint256 refund) = trade(buy, input, 100 ether, limit, abi.encode(buyer));
+            assertEq(filled, 0);
+            assertEq(fee, 0);
+            assertEq(hook.owedTotal(), 0);
+            if (buy == input) assertGt(refund, 0, "zero fill must return its entire reservation");
+            else assertEq(refund, 0);
+            assertTrue(vm.revertToState(snapshot));
+        }
+    }
+
+    function test_partialFillBelowThresholdDoesNotEarnReward() public {
+        // Keep a large input request, but stop after less than 10 IMD actually fills.
+        uint160 limit = pair0 ? Q96 - Q96 / 1_000_000 : Q96 + Q96 / 1_000_000;
+        (uint256 filled, uint256 fee, uint256 refund) = trade(true, true, 100 ether, limit, abi.encode(buyer));
+        assertGt(filled, 0);
+        assertLt(filled, 10 ether);
+        assertGt(fee, 0);
+        assertGt(refund, 0);
+        assertEq(hook.pending(buyer), 0, "eligibility must use the fill, not the request");
+    }
+
+    function test_refundBurnAvoidsPrefundingHugeInputReservation() public {
+        checkRefundBurn(true);
+    }
+
+    function test_refundBurnAvoidsPrefundingHugeOutputReservation() public {
+        checkRefundBurn(false);
+    }
+
+    function checkRefundBurn(bool buy) internal {
+        // First create a separate refund which the next trade must leave untouched.
+        uint160 firstLimit = TickMath.getSqrtPriceAtTick(pair0 ? int24(-1) : int24(1));
+        (,, uint256 oldClaims) = trade(true, true, 100_000 ether, firstLimit, abi.encode(buyer));
+        assertGt(oldClaims, 0);
+        uint256 payerFunds = buy ? 10_000 ether : 0;
+        deal(IMD, address(this), payerFunds);
+        uint256 recipientBefore = MockIMD(IMD).balanceOf(buyer);
+        uint256 feesBefore = hook.accruedBalance();
+        uint160 limit = TickMath.getSqrtPriceAtTick(buy == pair0 ? int24(-60) : int24(60));
+        // This request's reserve is much larger than the entire production IMD supply.
+        SwapParams memory params = SwapParams(buy == pair0, buy ? -int256(1e50) : int256(1e50), limit);
+        vm.recordLogs();
+        manager.unlock(abi.encode(uint8(3), abi.encode(params, abi.encode(buyer))));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 filled;
+        for (uint256 i; i < logs.length; ++i) {
+            if (
+                logs[i].emitter == address(manager)
+                    && logs[i].topics[0]
+                        == keccak256("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)")
+            ) {
+                (int128 a0, int128 a1,,,,) = abi.decode(logs[i].data, (int128, int128, uint160, uint128, int24, uint24));
+                int256 raw = pair0 ? int256(a0) : int256(a1);
+                filled = uint256(raw < 0 ? -raw : raw);
+            }
+        }
+        assertGt(filled, 0);
+        uint256 fee = hook.accruedBalance() - feesBefore;
+        assertEq(fee, filled / 50);
+        assertEq(manager.balanceOf(address(this), uint256(uint160(IMD))), oldClaims, "older claims consumed");
+        if (buy) {
+            assertEq(payerFunds - MockIMD(IMD).balanceOf(address(this)), filled + fee);
+        } else {
+            assertEq(MockIMD(IMD).balanceOf(address(this)), 0);
+            assertEq(MockIMD(IMD).balanceOf(buyer) - recipientBefore, filled - fee);
+        }
+        assertEq(manager.balanceOf(address(hook), uint256(uint160(IMD))), hook.accruedBalance());
+    }
+
     function partialFill(bool buy, bool input) internal {
         uint160 limit = TickMath.getSqrtPriceAtTick(buy == pair0 ? int24(-60) : int24(60));
         (uint256 filled, uint256 fee, uint256 refund) = trade(buy, input, 100_000 ether, limit, abi.encode(buyer));
@@ -220,6 +315,65 @@ contract EHSHookTest is HookHarness {
         assertEq(hook.owedTotal(), 0);
     }
 
+    function test_multipleBeneficiariesRetainIndependentBacking() public {
+        address firstBuyer = buyer;
+        trade(true, true, 100 ether, 0, abi.encode(firstBuyer));
+        uint256 firstReward = hook.pending(firstBuyer);
+        buyer = makeAddr("second output recipient");
+        trade(true, false, 200 ether, 0, abi.encode(buyer));
+        uint256 secondReward = hook.pending(buyer);
+        assertGt(firstReward, 0);
+        assertGt(secondReward, 0);
+        assertEq(hook.owedTotal(), firstReward + secondReward);
+
+        uint256 backingBefore = hook.accruedBalance();
+        MockIMD(IMD).setFailure(true);
+        vm.expectRevert();
+        hook.payRecorded(firstBuyer);
+        assertEq(hook.pending(firstBuyer), firstReward);
+        assertEq(hook.pending(buyer), secondReward);
+        assertEq(hook.owedTotal(), firstReward + secondReward);
+        assertEq(hook.accruedBalance(), backingBefore);
+        assertEq(manager.balanceOf(address(hook), uint256(uint160(IMD))), backingBefore);
+
+        MockIMD(IMD).setFailure(false);
+        vm.prank(makeAddr("permissionless payer"));
+        hook.payRecorded(firstBuyer);
+        assertEq(MockIMD(IMD).balanceOf(firstBuyer), firstReward);
+        assertEq(hook.pending(buyer), secondReward);
+        assertEq(hook.owedTotal(), secondReward);
+        vm.prank(buyer);
+        hook.claimRewards();
+        assertEq(MockIMD(IMD).balanceOf(buyer), secondReward);
+        assertEq(hook.owedTotal(), 0);
+        assertEq(hook.accruedBalance(), backingBefore - firstReward - secondReward);
+    }
+
+    function test_blockedBeneficiaryDoesNotBlockOtherBuyers() public {
+        address blockedBuyer = buyer;
+        trade(true, true, 100 ether, 0, abi.encode(blockedBuyer));
+        uint256 blockedReward = hook.pending(blockedBuyer);
+        MockIMD(IMD).setBlockedRecipient(blockedBuyer);
+        vm.expectRevert();
+        hook.payRecorded(blockedBuyer);
+        // A buy still succeeds even when its reward beneficiary cannot receive IMD.
+        trade(true, false, 100 ether, 0, abi.encode(blockedBuyer));
+        assertGt(hook.pending(blockedBuyer), blockedReward);
+        blockedReward = hook.pending(blockedBuyer);
+
+        buyer = makeAddr("unblocked buyer");
+        trade(true, true, 100 ether, 0, abi.encode(buyer));
+        uint256 reward = hook.pending(buyer);
+        hook.payRecorded(buyer);
+        assertEq(MockIMD(IMD).balanceOf(buyer), reward);
+        assertEq(hook.owedTotal(), blockedReward);
+        assertEq(hook.pending(blockedBuyer), blockedReward);
+        MockIMD(IMD).setBlockedRecipient(address(0));
+        hook.payRecorded(blockedBuyer);
+        assertEq(MockIMD(IMD).balanceOf(blockedBuyer), blockedReward);
+        assertEq(hook.owedTotal(), 0);
+    }
+
     function test_belowThresholdAndMalformedContextDoNotRevert() public {
         trade(true, true, 9 ether, 0, abi.encode(buyer));
         assertEq(hook.pending(buyer), 0);
@@ -234,6 +388,19 @@ contract EHSHookTest is HookHarness {
         (uint256 filled,,) = trade(true, true, 10.2 ether, 0, abi.encode(buyer));
         assertEq(filled, 10 ether);
         assertEq(hook.pending(buyer), 0.1 ether);
+    }
+
+    function test_oneWeiBelowThresholdDoesNotEarnReward() public {
+        (uint256 filled,,) = trade(true, true, 10.2 ether - 1, 0, abi.encode(buyer));
+        assertEq(filled, 10 ether - 1);
+        assertEq(hook.pending(buyer), 0);
+    }
+
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_smallSwapRounding(uint8 raw, bool buy, bool input) public {
+        (uint256 filled,,) = trade(buy, input, uint256(raw) + 1, 0, abi.encode(buyer));
+        assertLt(filled, 10 ether);
+        assertEq(hook.owedTotal(), 0);
     }
 
     function test_noRuntimeEscapeHatches() public view {
@@ -270,6 +437,9 @@ contract EHSHookTest is HookHarness {
         hook.afterSwap(address(this), key, s, BalanceDelta.wrap(0), "");
         vm.expectRevert(EHSHook.OnlyPoolManager.selector);
         hook.unlockCallback(abi.encode(buyer, 1 ether));
+        vm.prank(address(manager));
+        vm.expectRevert(EHSHook.ReentrantPayment.selector);
+        hook.unlockCallback(abi.encode(buyer, 1 ether));
     }
 
     function test_factoryCanCollectWithZeroLiquidityChange() public {
@@ -282,6 +452,20 @@ contract EHSHookTest is HookHarness {
         wrong.fee = 3000;
         vm.expectRevert();
         manager.initialize(wrong, Q96);
+    }
+
+    function test_poolBindingRejectsEveryMismatchedField() public {
+        for (uint256 i; i < 5; ++i) {
+            PoolKey memory wrong = key;
+            if (i == 0) wrong.currency0 = Currency.wrap(makeAddr("foreign currency0"));
+            if (i == 1) wrong.currency1 = Currency.wrap(makeAddr("foreign currency1"));
+            if (i == 2) wrong.fee = 0x800000; // Dynamic-fee flag is forbidden.
+            if (i == 3) wrong.tickSpacing = 10;
+            if (i == 4) wrong.hooks = IHooks(makeAddr("foreign hook"));
+            vm.prank(address(manager));
+            vm.expectRevert(EHSHook.InvalidPool.selector);
+            hook.beforeInitialize(address(this), wrong, Q96);
+        }
     }
 
     function test_extremeSpecifiedAmountRejectsOnlyUnrepresentableFee() public {
@@ -352,34 +536,58 @@ contract FreshManagerTest is HookHarness {
 
 contract EHSMainnetForkTest is HookHarness {
     function setUp() public {
-        string memory rpc = vm.envOr("EHS_MAINNET_RPC_URL", string(""));
-        if (bytes(rpc).length == 0) {
+        // Opt in with forge test --fork-url ... --fork-block-number ... .
+        // Tests never read environment variables or contact an RPC in the default run.
+        try vm.activeFork() returns (uint256) {}
+        catch {
             vm.skip(true);
             return;
         }
-        uint256 blockNumber = vm.envOr("EHS_FORK_BLOCK", uint256(0));
-        if (blockNumber == 0) vm.createSelectFork(rpc);
-        else vm.createSelectFork(rpc, blockNumber);
         assertEq(block.chainid, 1);
         manager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
         assertGt(address(manager).code.length, 0);
         assertGt(IMD.code.length, 0);
         assertEq(MockIMD(IMD).symbol(), "IMD");
+        assertEq(MockIMD(IMD).decimals(), 18);
         deal(IMD, address(this), 1e30);
         setupPool(false);
     }
 
     function test_forkAllSwapModesAndClaims() public {
-        trade(true, true, 100 ether, 0, abi.encode(buyer));
-        trade(true, false, 100 ether, 0, abi.encode(buyer));
-        trade(false, true, 100 ether, 0, abi.encode(buyer));
-        trade(false, false, 100 ether, 0, abi.encode(buyer));
+        uint256 rewards;
+        for (uint256 i; i < 4; ++i) {
+            bool buy = i & 1 == 0;
+            (uint256 filled,,) = trade(buy, i & 2 == 0, 100 ether, 0, abi.encode(buyer));
+            assertGt(filled, 0);
+            if (buy) rewards += filled / 100;
+            assertEq(hook.pending(buyer), rewards);
+        }
+        uint256 recipientBefore = MockIMD(IMD).balanceOf(buyer);
         hook.payRecorded(buyer);
+        assertEq(MockIMD(IMD).balanceOf(buyer) - recipientBefore, rewards);
         assertEq(hook.pending(buyer), 0);
+        assertEq(hook.owedTotal(), 0);
     }
 
     function test_forkPartialFills() public {
-        trade(true, true, 100_000 ether, TickMath.getSqrtPriceAtTick(pair0 ? int24(-60) : int24(60)), abi.encode(buyer));
-        trade(false, false, 100_000 ether, Q96, abi.encode(buyer));
+        uint256 snapshot = vm.snapshotState();
+        for (uint256 i; i < 4; ++i) {
+            bool buy = i & 1 == 0;
+            bool input = i & 2 == 0;
+            uint160 limit = TickMath.getSqrtPriceAtTick(buy == pair0 ? int24(-60) : int24(60));
+            (uint256 filled, uint256 fee, uint256 refund) = trade(buy, input, 100_000 ether, limit, abi.encode(buyer));
+            assertGt(fee, 0);
+            assertLt(filled, 10_000 ether, "not a partial fill");
+            assertEq(hook.pending(buyer), buy ? filled / 100 : 0);
+            if (buy == input) {
+                assertGt(refund, 0);
+                uint256 beforeBalance = MockIMD(IMD).balanceOf(address(this));
+                manager.unlock(abi.encode(uint8(2), bytes("")));
+                assertEq(MockIMD(IMD).balanceOf(address(this)), beforeBalance + refund);
+            } else {
+                assertEq(refund, 0);
+            }
+            assertTrue(vm.revertToState(snapshot));
+        }
     }
 }

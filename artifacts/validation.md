@@ -1,6 +1,6 @@
 # Validation record
 
-Worker validation completed on 2026-10-15. These are reproducible worker observations, not an independent audit or a claim that the external admission harness ran.
+Worker validation completed on 2026-10-15. The Foundry results were rerun for the bounded SIMD-LAUNCH completion; website results below retain the earlier contributor's evidence and were not rerun in this pass. These are reproducible worker observations, not an independent audit or a claim that the external admission harness ran.
 
 ## Build and functional checks
 
@@ -13,13 +13,16 @@ Worker validation completed on 2026-10-15. These are reproducible worker observa
 | `node scripts/validate-browser.mjs --webkit` | 17 WebKit check groups passed. Actual WebKit 27.2 through Playwright 1.64.1; external browser/system libraries. |
 | axe WCAG A/AA | Zero violations in Chromium, light and dark, 375px and 1440px. Remaining automatic-review items concern contrast of non-text symbol glyphs; inspected visually. |
 | `forge build --sizes` | Passed with solc 0.8.26, Cancun, optimizer, via IR, metadata hash disabled. Both deployment bytecodes have empty link references. |
-| Seeded `forge test` | 42 passed, zero failed, one skipped suite setup (optional mainnet fork without an RPC URL). |
-| Mainnet-fork suite | Two passed, zero failed at Ethereum block 26,197,826 against the real PoolManager and IMD. No broadcast. |
+| Seeded `forge test` | 60 passed, zero failed, one skipped suite setup (optional mainnet suite without an active fork). |
+| `forge fmt --check` | Passed. |
+| Mainnet-fork suite | Two passed, zero failed at Ethereum block 26,198,113 against the real PoolManager and IMD. No broadcast. |
 | `node scripts/check-submission.mjs` | Full source/export hash comparison, prohibited-artifact checks and conservative byte budget; see `submission-inventory.json` for exact final totals. |
 
-Foundry seed: `0xc47023846ff69d1d508a9d1527ec38306c24c871803ceb96f19522d1a5e085df`. Three fuzz functions ran 1,000 cases each, and two inherited reverse-order fuzz functions ran 256 cases each. The stateful sequence function checks solvency across twelve trades and interleaved claims per case.
+Foundry seed: `0xc47023846ff69d1d508a9d1527ec38306c24c871803ceb96f19522d1a5e085df`. Four fuzz functions ran 1,000 cases each, and three inherited reverse-order fuzz functions ran 256 cases each. The stateful sequence function checks solvency across twelve trades and interleaved claims per case.
 
-The fork invocation used `EHS_MAINNET_RPC_URL=https://ethereum-rpc.publicnode.com EHS_FORK_BLOCK=26197826` and `--match-contract EHSMainnetForkTest -vv`, with the same seed. The endpoint reported chain 1; the supplied IMD address had code and returned symbol `IMD`. Fork fixtures fund test accounts through Foundry; they are not production addresses or sample market data.
+The fork invocation used `forge test --match-contract EHSMainnetForkTest --fork-url https://ethereum-rpc.publicnode.com --fork-block-number 26198113 --no-storage-caching --rpc-timeout 30 -vv`, with the same seed. Tests use `vm.activeFork()` to opt in; none reads or changes environment variables. The first attempt at the previously recorded block 26,197,826 failed because the public RPC returned “historical state ... is not available”; that RPC response is retained in `checks/foundry-fork-archive-unavailable.txt`. The successful block was obtained from the endpoint's `eth_blockNumber`, and PoolManager code availability was checked before rerunning. The endpoint reported chain 1; the supplied IMD address had code and returned symbol `IMD` and 18 decimals. Fork fixtures fund test accounts through Foundry; they are not production addresses or sample market data.
+
+The added accounting checks cover net IMD cost/proceeds including claims, untaxed EHS movement, no-liquidity zero fills, tiny-swap rounding, exact threshold boundaries, partial fills below the threshold, multiple reward beneficiaries, blocked-recipient isolation, every pool-key binding, and same-unlock refund burning while preserving older claims. Deployment contracts, launch manifest, build configuration and dependencies remain unchanged.
 
 Raw compact results are retained in `checks/`. Screenshots of the actual export are in `screenshots/`. Browser tests serve the committed export under `/preview/`, exercising subpath-relative assets. They supply an empty development API, then explicit controlled live/error responses. The known IMD address is used only as an address-formatting fixture inside tests; no EHS address is shipped.
 
