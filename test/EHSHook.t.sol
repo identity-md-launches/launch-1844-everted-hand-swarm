@@ -19,6 +19,48 @@ import {EHS} from "../src/EHS.sol";
 import {EHSHook} from "../src/EHSHook.sol";
 import {MockIMD} from "./mocks/MockIMD.sol";
 
+/// @dev Shared router in the Universal Router's shape: swaps for whoever calls it, settles from
+/// its own balance, takes the output to the caller's chosen recipient, forwards whatever hookData
+/// the caller gives (the Uniswap interface gives none) and lets anyone sweep tokens it holds.
+contract SweepableRouter is IUnlockCallback {
+    IPoolManager internal immutable manager;
+
+    constructor(IPoolManager manager_) {
+        manager = manager_;
+    }
+
+    function swap(PoolKey calldata key, SwapParams calldata params, address recipient, bytes calldata hookData)
+        external
+    {
+        manager.unlock(abi.encode(key, params, recipient, hookData));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == address(manager), "manager only");
+        (PoolKey memory key, SwapParams memory params, address recipient, bytes memory hookData) =
+            abi.decode(data, (PoolKey, SwapParams, address, bytes));
+        BalanceDelta delta = manager.swap(key, params, hookData);
+        _settle(key.currency0, delta.amount0(), recipient);
+        _settle(key.currency1, delta.amount1(), recipient);
+        return "";
+    }
+
+    function _settle(Currency currency, int128 amount, address recipient) internal {
+        if (amount < 0) {
+            manager.sync(currency);
+            currency.transfer(address(manager), uint256(uint128(-amount)));
+            manager.settle();
+        } else if (amount > 0) {
+            manager.take(currency, recipient, uint256(uint128(amount)));
+        }
+    }
+
+    /// @dev Universal Router's SWEEP command: anyone may take whatever the router holds.
+    function sweep(address asset, address to) external {
+        Currency.wrap(asset).transfer(to, Currency.wrap(asset).balanceOfSelf());
+    }
+}
+
 abstract contract HookHarness is Test, IUnlockCallback {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -377,11 +419,47 @@ contract EHSHookTest is HookHarness {
     function test_belowThresholdAndMalformedContextDoNotRevert() public {
         trade(true, true, 9 ether, 0, abi.encode(buyer));
         assertEq(hook.pending(buyer), 0);
-        trade(true, true, 100 ether, 0, "");
-        trade(true, true, 100 ether, 0, hex"1234");
-        trade(true, true, 100 ether, 0, abi.encode(type(uint256).max));
+        (, uint256 fee1,) = trade(true, true, 100 ether, 0, "");
+        (, uint256 fee2,) = trade(true, true, 100 ether, 0, hex"1234");
+        (, uint256 fee3,) = trade(true, true, 100 ether, 0, abi.encode(type(uint256).max));
+        (, uint256 fee4,) = trade(true, true, 100 ether, 0, abi.encode(address(0)));
+        assertGt(fee1 * fee2 * fee3 * fee4, 0, "fee is still taken without recipient context");
         assertEq(hook.pending(buyer), 0);
-        assertGt(hook.pending(address(this)), 0, "fallback recipient is the calling swapper");
+        // No named recipient means no reward for anyone: `sender` is the router, never a buyer.
+        assertEq(hook.pending(address(this)), 0, "calling swapper must not be credited");
+        assertEq(hook.pending(address(0)), 0);
+        assertEq(hook.owedTotal(), 0, "unattributed buys leave the fee unowed");
+    }
+
+    /// A UI buy through a shared router (Universal Router shape: swaps for its caller, takes the
+    /// output to the chosen recipient, passes empty hookData, permissionless sweep) must not leave
+    /// a reward that anyone can pay to the router and sweep.
+    function test_sharedRouterWithEmptyHookDataEarnsNothingToSweep() public {
+        SweepableRouter router = new SweepableRouter(manager);
+        address attacker = makeAddr("attacker");
+        MockIMD(IMD).mint(address(router), 1_000 ether);
+        bool z = pair0;
+        uint160 limit = z ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        uint256 before = hook.accruedBalance();
+        router.swap(key, SwapParams(z, int256(500 ether), limit), buyer, "");
+        assertEq(token.balanceOf(buyer), 500 ether, "buyer received EHS");
+        assertGt(hook.accruedBalance() - before, 10 ether, "hook took its 2% fee");
+        assertEq(hook.pending(address(router)), 0, "reward recorded to the shared router");
+        assertEq(hook.pending(buyer), 0, "nobody named the buyer");
+        assertEq(hook.owedTotal(), 0);
+        // The router holds only what the payer did not spend; paying its record must add nothing.
+        uint256 leftover = MockIMD(IMD).balanceOf(address(router));
+        vm.startPrank(attacker);
+        hook.payRecorded(address(router));
+        assertEq(MockIMD(IMD).balanceOf(address(router)), leftover, "reward pushed to the router");
+        router.sweep(IMD, attacker);
+        vm.stopPrank();
+        assertEq(MockIMD(IMD).balanceOf(attacker), leftover, "attacker swept more than the leftover");
+        // The same router naming its recipient earns the reward for that recipient, not itself.
+        MockIMD(IMD).mint(address(router), 1_000 ether);
+        router.swap(key, SwapParams(z, int256(500 ether), limit), buyer, abi.encode(buyer));
+        assertGt(hook.pending(buyer), 0);
+        assertEq(hook.pending(address(router)), 0);
     }
 
     function test_exactTenIMDThreshold() public {

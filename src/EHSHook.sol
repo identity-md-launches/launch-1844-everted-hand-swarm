@@ -14,8 +14,9 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/src/types/BeforeSwapDe
 /// @notice Immutable 2% IMD swap fee and separately claimable 1% buyer rewards.
 /// @dev Routers pass abi.encode(outputRecipient) as hookData. PoolManager exposes the
 /// router, not its eventual output recipient; this explicit routing context is essential.
-/// Empty/malformed context never blocks trading and uses the calling swapper as recipient. Fee refunds belong
-/// to `sender`, the caller whose PoolManager delta pays the reserve (ERC-6909 claims).
+/// Empty/malformed context never blocks trading; such a buy records no reward, because `sender` is
+/// the router and a reward owed to a shared router would be anyone's. Fee refunds belong to
+/// `sender`, the caller whose PoolManager delta pays the reserve (ERC-6909 claims).
 contract EHSHook is IUnlockCallback {
     address public constant PAIRED_CURRENCY = 0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7;
     uint256 public constant FEE_BPS = 200;
@@ -110,13 +111,11 @@ contract EHSHook is IUnlockCallback {
             emit FeeAccrued(filled, fee);
         }
         if (pairDelta < 0 && filled >= MIN_BUY) {
-            address beneficiary = sender;
-            uint256 word;
-            if (data.length == 32) {
-                assembly ("memory-safe") { word := calldataload(data.offset) }
-                if (word != 0 && word <= type(uint160).max) beneficiary = address(uint160(word));
-            }
-            uint256 reward = filled / 100;
+            // The reward belongs to the swap recipient, whom only the router knows. `sender` is the
+            // router, usually a shared contract anyone can sweep, so it is never credited: without a
+            // named recipient the fee stays unowed in the hook.
+            address beneficiary = _recipient(data);
+            uint256 reward = beneficiary == address(0) ? 0 : filled / 100;
             uint256 available = accruedBalance - owedTotal;
             if (reward > available) reward = available;
             if (reward != 0) {
@@ -153,6 +152,16 @@ contract EHSHook is IUnlockCallback {
         poolManager.burn(address(this), currency.toId(), amount);
         poolManager.take(currency, beneficiary, amount);
         return "";
+    }
+
+    /// @dev The recipient named by hookData: exactly one canonical nonzero address word, else none.
+    function _recipient(bytes calldata data) private pure returns (address) {
+        if (data.length != 32) return address(0);
+        uint256 word;
+        assembly ("memory-safe") {
+            word := calldataload(data.offset)
+        }
+        return word <= type(uint160).max ? address(uint160(word)) : address(0);
     }
 
     function _pairIsSpecified(PoolKey calldata key, SwapParams calldata params) private pure returns (bool) {
