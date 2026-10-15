@@ -17,7 +17,8 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {EHS} from "../src/EHS.sol";
 import {EHSHook} from "../src/EHSHook.sol";
 import {MockIMD} from "./mocks/MockIMD.sol";
-import {HookHarness} from "./EHSHook.t.sol";
+import {HookHarness, SweepableRouter} from "./EHSHook.t.sol";
+import {IUnlockCallback} from "v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
 /// @dev A second liquidity provider, independent of the test harness, to show the hook leaves LP
 /// operations and pool donations alone.
@@ -60,6 +61,30 @@ contract OtherLP {
         } else if (amount > 0) {
             manager.take(currency, address(this), uint256(uint128(amount)));
         }
+    }
+}
+
+/// @dev Mints ERC-6909 IMD claims to any address from its own IMD, as anyone may through the manager.
+contract ClaimPusher is IUnlockCallback {
+    IPoolManager internal immutable manager;
+
+    constructor(IPoolManager manager_) {
+        manager = manager_;
+    }
+
+    function push(address to, uint256 id, uint256 amount) external {
+        manager.unlock(abi.encode(to, id, amount));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == address(manager), "manager only");
+        (address to, uint256 id, uint256 amount) = abi.decode(data, (address, uint256, uint256));
+        manager.mint(to, id, amount);
+        Currency currency = Currency.wrap(address(uint160(id)));
+        manager.sync(currency);
+        currency.transfer(address(manager), amount);
+        manager.settle();
+        return "";
     }
 }
 
@@ -234,13 +259,127 @@ contract EHSHookEdgeTest is HookHarness {
         assertTrue(seen, "no FeeRefunded event");
     }
 
-    function test_hookDataOfTheWrongLengthFallsBackToTheSwapper() public {
-        trade(true, true, 100 ether, 0, abi.encodePacked(buyer)); // 20 bytes
-        trade(true, true, 100 ether, 0, abi.encode(buyer, uint256(1))); // 64 bytes
-        trade(true, true, 100 ether, 0, abi.encode(uint256(0))); // zero word
+    function test_hookDataOfTheWrongLengthRecordsNoRewardForAnyone() public {
+        // Each shape is one qualifying buy (100 IMD filled) whose context is not exactly one
+        // canonical nonzero address word. The fee is taken; nobody is credited, least of all the
+        // calling swapper, which under a shared router would be sweepable by anyone.
+        (, uint256 fee1,) = trade(true, true, 102 ether, 0, abi.encodePacked(buyer)); // 20 bytes
+        (, uint256 fee2,) = trade(true, true, 102 ether, 0, abi.encode(buyer, uint256(1))); // 64 bytes
+        (, uint256 fee3,) = trade(true, true, 102 ether, 0, abi.encode(uint256(0))); // zero word
+        (, uint256 fee4,) = trade(true, true, 102 ether, 0, abi.encode(uint256(type(uint160).max) + 1)); // 21 bytes set
+        assertGt(fee1, 0);
+        assertEq(fee2, fee1);
+        assertEq(fee3, fee1);
+        assertEq(fee4, fee1);
         assertEq(hook.pending(buyer), 0, "malformed context must not pick a beneficiary");
-        assertGt(hook.pending(address(this)), 0);
-        assertEq(hook.owedTotal(), hook.pending(address(this)));
+        assertEq(hook.pending(address(this)), 0, "calling swapper must not be credited");
+        assertEq(hook.pending(address(0)), 0);
+        assertEq(hook.owedTotal(), 0, "unattributed buys leave the fee unowed");
+        assertEq(hook.accruedBalance(), fee1 * 4);
+        // The same buy with a canonical word is rewarded, so the shapes above were the only reason.
+        (uint256 filled,,) = trade(true, true, 102 ether, 0, abi.encode(buyer));
+        assertEq(hook.pending(buyer), filled / 100);
+        assertEq(hook.owedTotal(), filled / 100);
+    }
+
+    // ------------------------------------------------ settled review findings
+
+    /// @dev Finding 7c10a20d (info, answered "documented"): ERC-6909 IMD pushed at the hook from
+    /// outside is never counted in accruedBalance and no call path can pay or withdraw it. The
+    /// README's "Permanent remainder" paragraph now says so; this pins the documented behaviour.
+    function test_outsideClaimsPushedAtTheHookAreNeitherCountedNorPayable() public {
+        trade(true, true, 102 ether, 0, abi.encode(buyer));
+        uint256 accruedBefore = hook.accruedBalance();
+        uint256 owedBefore = hook.owedTotal();
+        uint256 claimsBefore = manager.balanceOf(address(hook), ID);
+        assertEq(claimsBefore, accruedBefore);
+
+        ClaimPusher pusher = new ClaimPusher(manager);
+        MockIMD(IMD).mint(address(pusher), 5 ether);
+        pusher.push(address(hook), ID, 5 ether);
+
+        assertEq(manager.balanceOf(address(hook), ID), claimsBefore + 5 ether, "the manager accepted the push");
+        assertEq(hook.accruedBalance(), accruedBefore, "outside claims must not count as fees");
+        assertEq(hook.owedTotal(), owedBefore, "outside claims must not become rewards");
+        // A later buy (sent directly, since the harness helper asserts claims == accruedBalance)
+        // still accrues and rewards from the hook's own count only.
+        uint160 limit = pair0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        manager.unlock(
+            abi.encode(uint8(1), abi.encode(SwapParams(pair0, -int256(102 ether), limit), abi.encode(buyer)))
+        );
+        assertEq(hook.accruedBalance(), accruedBefore + 2 ether);
+        assertEq(hook.pending(buyer), 2 ether);
+        assertEq(manager.balanceOf(address(hook), ID), hook.accruedBalance() + 5 ether);
+        // Nothing can move the pushed claims: paying and claiming only ever touch recorded rewards.
+        hook.payRecorded(buyer);
+        hook.payRecorded(address(pusher));
+        vm.prank(address(pusher));
+        hook.claimRewards();
+        assertEq(hook.owedTotal(), 0);
+        assertEq(MockIMD(IMD).balanceOf(buyer), 2 ether);
+        assertEq(hook.accruedBalance(), 2 ether, "unowed remainder of two 2% fees");
+        assertEq(manager.balanceOf(address(hook), ID), hook.accruedBalance() + 5 ether, "pushed claims moved");
+        assertEq(MockIMD(IMD).balanceOf(address(pusher)), 0);
+    }
+
+    /// @dev Finding 225b3991 (info, answered "documented"): the specified-side refund is minted to
+    /// PoolManager's `sender`, the router, not to the router's payer. A router that never burns
+    /// claims strands the refund; one that burns its swap's refund before settling passes it on.
+    function test_refundClaimBelongsToTheRouterNotItsPayer() public {
+        SweepableRouter router = new SweepableRouter(manager);
+        address payer = makeAddr("payer");
+        uint256 budget = 100_000 ether;
+        MockIMD(IMD).mint(address(router), budget);
+        uint160 limit = TickMath.getSqrtPriceAtTick(pair0 ? int24(-60) : int24(60));
+        uint256 feesBefore = hook.accruedBalance();
+        vm.recordLogs();
+        router.swap(key, SwapParams(pair0, -int256(budget), limit), payer, abi.encode(payer));
+        uint256 filled = fillFromLogs(vm.getRecordedLogs());
+        uint256 fee = hook.accruedBalance() - feesBefore;
+        assertEq(fee, filled / 50);
+        uint256 reserve = budget / 51 + (budget % 51 == 0 ? 0 : 1);
+        uint256 refund = reserve - fee;
+        assertGt(refund, 0, "the price limit did not leave a refund");
+        assertEq(manager.balanceOf(address(router), ID), refund, "refund claim is owned by the router");
+        assertEq(manager.balanceOf(payer, ID), 0, "payer holds no claim");
+        assertEq(MockIMD(IMD).balanceOf(payer), 0, "payer received no IMD");
+        // The buy itself was correct: fee 2% of the fill, reward 1% of it, EHS went to the payer.
+        assertGt(token.balanceOf(payer), 0);
+        assertEq(hook.pending(payer), filled / 100);
+        // The router paid the whole reserve in IMD; the refund is recoverable only by burning the claim.
+        assertEq(MockIMD(IMD).balanceOf(address(router)), budget - filled - fee - refund);
+        assertEq(MockIMD(IMD).balanceOf(address(router)), budget - filled - reserve);
+    }
+
+    function fillFromLogs(Vm.Log[] memory logs) internal view returns (uint256 filled) {
+        bytes32 topic = keccak256("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter == address(manager) && logs[i].topics[0] == topic) {
+                (int128 a0, int128 a1,,,,) = abi.decode(logs[i].data, (int128, int128, uint160, uint128, int24, uint24));
+                int256 d = pair0 ? int256(a0) : int256(a1);
+                filled = uint256(d < 0 ? -d : d);
+            }
+        }
+    }
+
+    /// @dev One swap in one transaction through a router that burns its own refund before settling:
+    /// its payer is charged exactly fill + 2% on a partial fill, so the stranding is the router's
+    /// choice and not the hook's.
+    function test_routerThatBurnsRefundChargesPayerOnlyFillPlusFee() public {
+        uint160 limit = TickMath.getSqrtPriceAtTick(pair0 ? int24(-60) : int24(60));
+        uint256 budget = 100_000 ether;
+        uint256 imdBefore = MockIMD(IMD).balanceOf(address(this));
+        uint256 feesBefore = hook.accruedBalance();
+        SwapParams memory params = SwapParams(pair0, -int256(budget), limit);
+        vm.recordLogs();
+        manager.unlock(abi.encode(uint8(3), abi.encode(params, abi.encode(buyer)))); // mode 3 burns the refund
+        uint256 filled = fillFromLogs(vm.getRecordedLogs());
+        uint256 fee = hook.accruedBalance() - feesBefore;
+        assertGt(fee, 0);
+        assertEq(fee, filled / 50);
+        assertLt(filled + fee, budget, "the price limit did not cut the fill");
+        assertEq(manager.balanceOf(address(this), ID), 0, "no claim left behind");
+        assertEq(imdBefore - MockIMD(IMD).balanceOf(address(this)), filled + fee, "payer charged more than fill + 2%");
     }
 
     function test_sellsNeverRecordRewardsForAnyBeneficiary() public {

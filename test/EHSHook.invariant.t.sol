@@ -52,6 +52,7 @@ contract EHSHookHandler is Test, IUnlockCallback {
     mapping(address => uint256) public ghostPaid;
     uint256 public swaps;
     uint256 public buysRewarded;
+    uint256 public unattributedBuys; // qualifying buys without a canonical recipient word: fee kept, no reward
     uint256 public partialFills;
     uint256 public zeroFills;
     uint256 public payments;
@@ -100,7 +101,9 @@ contract EHSHookHandler is Test, IUnlockCallback {
         else if (mode == 2) context = abi.encodePacked(beneficiary); // 20 bytes: malformed
         else if (mode == 3) context = abi.encode(beneficiary, uint256(1)); // 64 bytes: malformed
         else context = abi.encode(uint256(type(uint160).max) + 1); // not an address
-        address expectedBeneficiary = mode == 0 ? beneficiary : address(this);
+        // Only a canonical single-word recipient is rewarded; every other shape rewards nobody, and
+        // in particular never this swapper (the router in PoolManager's eyes).
+        address expectedBeneficiary = beneficiary;
 
         uint256 feesBefore = hook.accruedBalance();
         uint256 owedBefore = hook.owedTotal();
@@ -125,10 +128,12 @@ contract EHSHookHandler is Test, IUnlockCallback {
         if (!specified) require(refund == 0, "refund on the unspecified side");
 
         uint256 reward = hook.owedTotal() - owedBefore;
-        uint256 expectedReward = buy && filled >= 10 ether ? filled / 100 : 0;
+        uint256 expectedReward = mode == 0 && buy && filled >= 10 ether ? filled / 100 : 0;
         require(reward == expectedReward, "reward is not 1% of a qualifying buy");
         require(hook.pending(expectedBeneficiary) - pendingBefore == reward, "reward went to the wrong beneficiary");
+        require(hook.pending(address(this)) == 0, "the calling swapper was credited");
         if (reward != 0) buysRewarded++;
+        else if (mode != 0 && buy && filled >= 10 ether) unattributedBuys++;
 
         ghostFees += fee;
         ghostRefunds += refund;
@@ -379,7 +384,7 @@ contract EHSHookInvariantTest is StdInvariant, Test {
         for (uint256 i; i < handler.actorCount(); ++i) {
             sum += hook.pending(handler.actors(i));
         }
-        sum += hook.pending(address(handler));
+        assertEq(hook.pending(address(handler)), 0, "the router-shaped swapper must never be owed");
         assertEq(hook.owedTotal(), sum);
     }
 
@@ -420,7 +425,7 @@ contract EHSHookInvariantTest is StdInvariant, Test {
     function invariant_callSummary() public view {
         // Coverage sanity: the sequence actually traded in both regimes. Checked loosely so a short
         // sequence does not fail; the counters are what a reviewer reads in a failing run.
-        assertLe(handler.buysRewarded(), handler.swaps());
+        assertLe(handler.buysRewarded() + handler.unattributedBuys(), handler.swaps());
         assertLe(handler.zeroFills() + handler.partialFills(), handler.swaps());
     }
 }
